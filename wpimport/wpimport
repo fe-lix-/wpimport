@@ -72,8 +72,14 @@ class WordpressImporter:
 
     def __init__(self, options,args):
         self.options = options
-        self.url = args[0]
-        self.user = args[1]
+        try:
+            self.url = args[0]
+        except IndexError:
+            print 'Missing XMLRPC service URL'
+        try:
+            self.user = args[1]
+        except IndexError:
+            print 'Missing username'
 
     def password(self):
         self.passwd = getpass.getpass()
