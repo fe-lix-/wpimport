@@ -1,7 +1,8 @@
 import csv
 import logging
-import os.path as path
+from os import path
 import urlparse
+
 from BeautifulSoup import BeautifulSoup
 
 class URLTranslator:
@@ -20,7 +21,7 @@ class URLTranslator:
     def translate(self, html):
         if not html:
             return None
-            
+
         soup = BeautifulSoup(html)
 
         links = soup.findAll('a')
@@ -29,12 +30,12 @@ class URLTranslator:
             if l.has_key('href'):
                 href = l['href']
                 if self.location:
-                    href = urlparse.urljoin(self.location, href) 
+                    href = urlparse.urljoin(self.location, href)
                 if self.dictionary.has_key(href):
                     logging.info('%s translated in %s' % (href, self.dictionary[href]))
                     l['href'] = self.dictionary[href]
-                else : 
+                else :
                     logging.info('missing translation for %s' % (href))
-       
+
 
         return unicode(soup)

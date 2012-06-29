@@ -3,13 +3,15 @@
 import getpass
 from optparse import OptionParser
 import socket
+import sys
 
+from htmlclean import clean_html
+from utf8_csv import UnicodeWriter, UnicodeReader
 from url_translate import URLTranslator
 from wordpress_xmlrpc.base import *
 from wordpress_xmlrpc import Client
 from wordpress_xmlrpc import WordPressPage
 from wordpress_xmlrpc.methods.pages import EditPage, NewPage, GetPage
-
 
 
 class Page:
@@ -20,7 +22,7 @@ class Page:
         self.content = ''
         self.custom_fields = []
         self.translator = URLTranslator()
-        self.translator.load_dictionary_from_csv('eugin-url.csv')
+        self.translator.load_dictionary_from_csv('url.csv')
 
     def filter_page(self, content):
         content = self.translator.translate(clean_html(content))
@@ -30,25 +32,28 @@ class Page:
         if csv[1]:
             self.translator.location = csv[1]
             self.url = csv[1]
+            if self.url[0] == '/':
+                self.url = self.url[1:]
+                self.custom_fields.append({'key': 'custom_permalink', 'value': self.url})
         self.title = csv[2]
         content = clean_html(csv[3])
         content = self.translator.translate(content)
-        if content :
+        if content:
             self.content = content
         else:
             self.content = ''
         if len(csv) >= 5:
-            self.custom_fields.append({"key":"_su_title","value":csv[4]})
+            self.custom_fields.append({"key": "_su_title", "value": csv[4]})
         else:
-            self.custom_fields.append({"key":"_su_title","value":""})
+            self.custom_fields.append({"key": "_su_title", "value": ""})
         if len(csv) >= 6:
-            self.custom_fields.append({"key":"_su_keywords","value":csv[5]})
+            self.custom_fields.append({"key": "_su_keywords", "value": csv[5]})
         else:
-            self.custom_fields.append({"key":"_su_keywords","value":""})
+            self.custom_fields.append({"key": "_su_keywords", "value": ""})
         if len(csv) >= 7:
-            self.custom_fields.append({"key":"_su_description","value":csv[6]})
+            self.custom_fields.append({"key": "_su_description", "value": csv[6]})
         else:
-            self.custom_fields.append({"key":"_su_description","value":""})
+            self.custom_fields.append({"key": "_su_description", "value": ""})
 
     def get(self, name):
         if name == 'keywords':
@@ -67,24 +72,35 @@ class Page:
     def to_csv(self):
         return [self.pid, self.title, self.content, self.get('title'), self.get('keywords'), self.get('description')]
 
+    def __unicode__(self):
+        print 'ID : {0}'.format(self.pid)
+        print 'Title : {0}'.format(self.title)
+        print 'Custom fields : {0}'.format(self.custom_fields)
+
 
 class WordpressImporter:
 
-    def __init__(self, options,args):
+    def __init__(self, options, args):
+        error = False
         self.options = options
         try:
             self.url = args[0]
         except IndexError:
             print 'Missing XMLRPC service URL'
+            error = True
         try:
             self.user = args[1]
         except IndexError:
             print 'Missing username'
+            error = True
+
+        if error:
+            sys.exit()
 
     def password(self):
         self.passwd = getpass.getpass()
 
-    def update_metas(self,page, metas):
+    def update_metas(self, page, metas):
         if not hasattr(page, 'custom_fields'):
             page.custom_fields = []
         for m in metas:
@@ -96,8 +112,7 @@ class WordpressImporter:
             if not updated:
                 page.custom_fields.append(m)
 
-
-    def load_element(self,csvline):
+    def load_element(self, csvline):
         tmp = Page()
         tmp.from_csv(csvline)
 
@@ -106,39 +121,39 @@ class WordpressImporter:
             page = WordPressPage()
             page.title = tmp.title
             page.description = tmp.content
-            self.update_metas(page,tmp.custom_fields)
-            try:
-                tmp.pid = self.xmlrpc.call(NewPage(page,True))
-            except socket.gaierror:
-                print 'Failed'
+            self.update_metas(page, tmp.custom_fields)
+            if not self.options.pretend:
+                print 'pretend'
+                #try:
+                #    tmp.pid = self.xmlrpc.call(NewPage(page,True))
+                #except socket.gaierror:
+                #    print 'Failed'
             self.csvwriter.writerow(tmp.to_csv())
         else:
             print 'Updating page %s - %s' % (tmp.pid, tmp.title)
             page = self.xmlrpc.call(GetPage(tmp.pid))
-            page.title = tmp.title
-            page.description = tmp.content
-            try:
-                self.update_metas(page, tmp.custom_fields)
-            except socket.gaierror:
-                print 'Failed'
-            self.xmlrpc.call(EditPage(tmp.pid,page,True))
+            #page.title = tmp.title
+            #page.description = tmp.content
+            if not self.options.pretend:
+                try:
+                    self.update_metas(page, tmp.custom_fields)
+                except socket.gaierror:
+                    print 'Failed'
+            self.xmlrpc.call(EditPage(tmp.pid, page, True))
+
+    def load_header(self, csvline):
+        self.header = csvline
 
     def run(self):
         self.password()
         self.xmlrpc = Client(self.url, self.user, self.passwd)
         if self.options.csv:
             f = open(self.options.csv, 'r')
-            if self.options.csv == 'output.csv':
-                tmp_csv = open('./output-1.csv','w+')
-            else:
-                tmp_csv = open('./output.csv','w+')
+            tmp_csv = open(self.options.csv + '.result', 'w+')
             self.csvwriter = UnicodeWriter(tmp_csv)
             csvreader = UnicodeReader(f)
             for row in csvreader:
                 self.load_element(row)
-
-
-
 
 
 def main():
@@ -152,9 +167,17 @@ def main():
         default=False
     )
 
+    parser.add_option(
+        '--pretend',
+        help="Just prints, no modifications are made",
+        dest='pretend',
+        default=False,
+        action="store_true"
+    )
+
     (options, args) = parser.parse_args()
 
-    wp_importer = WordpressImporter(options,args)
+    wp_importer = WordpressImporter(options, args)
     wp_importer.run()
 
 if __name__ == "__main__":
