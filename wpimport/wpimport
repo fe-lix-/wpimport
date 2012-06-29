@@ -8,10 +8,10 @@ import sys
 from htmlclean import clean_html
 from utf8_csv import UnicodeWriter, UnicodeReader
 from url_translate import URLTranslator
-from wordpress_xmlrpc.base import *
+#from wordpress_xmlrpc.base import *
 from wordpress_xmlrpc import Client
 from wordpress_xmlrpc import WordPressPage
-from wordpress_xmlrpc.methods.pages import EditPage, NewPage, GetPage
+from wordpress_xmlrpc.methods.pages import EditPage, GetPage
 
 
 class Page:
