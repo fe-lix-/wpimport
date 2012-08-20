@@ -4,6 +4,7 @@ import getpass
 from optparse import OptionParser
 import socket
 import sys
+import xmlrpclib
 
 from htmlclean import clean_html
 from utf8_csv import UnicodeWriter, UnicodeReader
@@ -15,6 +16,9 @@ from wordpress_xmlrpc.methods.pages import EditPage, GetPage
 
 
 class Page:
+
+    FIELDS = ['id', 'url', 'h1', 'content', 'title', 'keywords', 'description']
+
     def __init__(self):
         self.pid = 0
         self.url = None
@@ -70,19 +74,49 @@ class Page:
                     return fields['value']
 
     def to_csv(self):
-        return [self.pid, self.title, self.content, self.get('title'), self.get('keywords'), self.get('description')]
+        return [self.pid, self.url, self.title, self.content, self.get('title'), self.get('keywords'), self.get('description')]
 
     def __unicode__(self):
         print 'ID : {0}'.format(self.pid)
         print 'Title : {0}'.format(self.title)
         print 'Custom fields : {0}'.format(self.custom_fields)
 
+class CSVCleaner:
+
+    def __init__(self, header, fields):
+        self.header = header
+        self.len_fields = len(fields)
+        self.template = ['' for i in range(0, self.len_fields)]
+        self.field_position = []
+        for pos, elem_header in enumerate(self.header):
+            idx = None
+            for pos2, field in enumerate(fields):
+                if elem_header == field:
+                    idx = pos2
+            self.field_position.append(idx)
+
+        print self.field_position
+
+    def process(self, csvline):
+        res = list(self.template)
+        for pos, value in enumerate(csvline):
+            idx = self.field_position[pos]
+            if idx != None:
+                res[idx] = value
+        return res
+
+
 
 class WordpressImporter:
+    """ This class can connect to the XMLRPC service and submit some RPC to update the
+        distant blog.
+    """
 
     def __init__(self, options, args):
         error = False
         self.options = options
+        self.csv_cleaner = None
+        self.csvwriter = None
         try:
             self.url = args[0]
         except IndexError:
@@ -97,10 +131,9 @@ class WordpressImporter:
         if error:
             sys.exit()
 
-    def password(self):
-        self.passwd = getpass.getpass()
-
     def update_metas(self, page, metas):
+        """
+        """
         if not hasattr(page, 'custom_fields'):
             page.custom_fields = []
         for m in metas:
@@ -112,7 +145,29 @@ class WordpressImporter:
             if not updated:
                 page.custom_fields.append(m)
 
+    def load_element_with_header(self, csvline):
+        """ This method makes sure that the input csv as the right number of elements
+            We consider that the input is not well ordered, except for the column id
+            that should be the first.
+        """
+        csvline = self.csv_cleaner.process(csvline)        
+        self.process_element(csvline)
+
+
     def load_element(self, csvline):
+        """ This method makes sur that the input csv as the right number of elements
+            We consider that the input is already well ordered.
+        """
+        len_page_fields = len(Page.FIELDS)
+        if len(csvline) > len_page_fields:
+            csvline = csvline[:len_page_fields]
+        else:
+            csvline = csvline + ['' for elem in range(0, len_page_fields)]
+        self.process_element(csvline)
+
+    def process_element(self, csvline):
+        """
+        """
         tmp = Page()
         tmp.from_csv(csvline)
 
@@ -128,35 +183,55 @@ class WordpressImporter:
                 #    tmp.pid = self.xmlrpc.call(NewPage(page,True))
                 #except socket.gaierror:
                 #    print 'Failed'
-            self.csvwriter.writerow(tmp.to_csv())
         else:
-            print 'Updating page %s - %s' % (tmp.pid, tmp.title)
-            page = self.xmlrpc.call(GetPage(tmp.pid))
-            #page.title = tmp.title
-            #page.description = tmp.content
+            try:
+                page = self.xmlrpc.call(GetPage(tmp.pid))
+            except xmlrpclib.Fault:
+                print 'Could not retrieve page with ID {0}'.format(tmp.pid)
+                return None
+
+            page.title = tmp.title
+            if self.options.update_content:
+                page.description = tmp.content
             if not self.options.pretend:
                 try:
                     self.update_metas(page, tmp.custom_fields)
                 except socket.gaierror:
-                    print 'Failed'
-            self.xmlrpc.call(EditPage(tmp.pid, page, True))
+                    print 'failed'
+            try:
+                self.xmlrpc.call(EditPage(tmp.pid, page, True))
+            except xmlrpclib.Fault:
+                print 'Could not update page with ID {0}'.format(tmp.pid)
+                return None
+            print 'Updated page %s - %s' % (tmp.pid, tmp.title)
 
-    def load_header(self, csvline):
-        self.header = csvline
 
     def run(self):
-        self.password()
+        """
+        """
+        self.passwd = getpass.getpass()
         self.xmlrpc = Client(self.url, self.user, self.passwd)
+
+
         if self.options.csv:
             f = open(self.options.csv, 'r')
-            tmp_csv = open(self.options.csv + '.result', 'w+')
-            self.csvwriter = UnicodeWriter(tmp_csv)
             csvreader = UnicodeReader(f)
             for row in csvreader:
-                self.load_element(row)
+                if row[0] == "id":
+                    self.csv_cleaner = CSVCleaner(row, Page.FIELDS)
+                elif self.csv_cleaner:
+                    self.load_element_with_header(row)
+                else:
+                    self.load_element(row)
 
+        if self.options.get_site_content:
+            tmp_csv = open(self.options.csv + '.result', 'w+')
+            self.csvwriter = UnicodeWriter(tmp_csv)
 
 def main():
+    """ Main entry point.
+        It setups the command-line parameters and launch the application.
+    """
     parser = OptionParser()
 
     parser.add_option(
@@ -173,6 +248,22 @@ def main():
         dest='pretend',
         default=False,
         action="store_true"
+    )
+
+    parser.add_option(
+        '--update-content',
+        help="Update the content of existing pages. Warning : this can overwrite all of your content",
+        dest='update_content',
+        default=False,
+        action="store_true"
+    )
+
+    parser.add_option(
+        '--get-site-content',
+        help="Downloads the actual content to a CSV file",
+        dest='get_site_content',
+        metavar='CSV',
+        default=False,
     )
 
     (options, args) = parser.parse_args()
